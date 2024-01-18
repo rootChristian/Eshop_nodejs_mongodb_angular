@@ -2,9 +2,7 @@
 
 `Eshop Chagest`
 
-## Getting Started with create two folders
-
-## Backend
+-   `## Backend`
 
 ### In the project directory, you can run this command to inizialized a project and install a dependencies
 
@@ -22,4 +20,4 @@
 -   https://www.npmjs.com/package/crypto-js
 -   https://www.npmjs.com/package/multer
 
-## Frontend
+-   ## `Frontend`
