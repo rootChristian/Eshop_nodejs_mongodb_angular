@@ -4,11 +4,44 @@
 ***********************************************************************/
 
 const express = require('express');
-require("dotenv/config");
 const app = express();
+require("dotenv/config");
+const path = require('path');
+const morgan = require('morgan');
+const mongoose = require('mongoose');
+const connectWithRetry = require('./src/config/dbConn'); // DB connection
+const { logger } = require('./src/middleware/logger');
 
+const port = process.env.PORT || 5000;
+const api = process.env.API_URL;
 
-const port = process.env.PORT;
+// Get all the routes
+const productRoutes = require('./src/routes/ProductRoute');
+
+// Middleware
+app.use(express.json());
+app.use(morgan('tiny'));
+
+app.use(logger);
+
+connectWithRetry();
+
+app.use('/', express.static(path.join(__dirname, 'public')));
+app.use('/', require('./src/routes/root'));
+
+app.use(`${api}/products`, productRoutes);
+
+app.all('*', (req, res) => {
+    res.status(404)
+    if (req.accepts('html')) {
+        res.sendFile(path.join(__dirname, './src/views', 'error404.html'));
+    } else if (req.accepts('json')) {
+        res.json({ message: '404 Not Found' });
+    } else {
+        res.type('txt').send('404 Not Found');
+    }
+});
+
 
 app.listen(port, () => {
     console.log('************************************'
