@@ -16,10 +16,20 @@ const categorySchema = mongoose.Schema(
         },
         icon: {
             type: String,
+            default: null
         },
         color: {
+            type: [String],
+            default: []
+        },
+        image: {
             type: String,
-        }
+            default: null
+        },
+        cloudinary_id: {
+            type: String,
+            default: null
+        },
     },
     {
         timestamps: true,
@@ -34,4 +44,5 @@ categorySchema.set('toJSON', {
     virtuals: true,
 });
 
-exports.Category = mongoose.model('Category', categorySchema);
+const Category = mongoose.model('Category', categorySchema);
+module.exports = Category;

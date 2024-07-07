@@ -23,7 +23,7 @@ const productSchema = mongoose.Schema(
         },
         richDescription: {
             type: String,
-            default: ''
+            default: null
         },
         price: {
             type: Number,
@@ -33,23 +33,23 @@ const productSchema = mongoose.Schema(
         },
         image: {
             type: String,
-            default: ''
+            default: null
         },
         images: [{
-            type: String
+            type: String,
+            default: null
         }],
         cloudinary_id: {
             type: String,
+            default: null
         },
         size: {
             type: [String],
-            default: []
-            //type: Array
+            default: null
         },
         color: {
             type: [String],
-            default: []
-            //type: Array
+            default: null
         },
         category: {
             type: mongoose.Schema.Types.ObjectId,
@@ -84,5 +84,5 @@ productSchema.set('toJSON', {
     virtuals: true,
 });
 
-
-exports.Product = mongoose.model('Product', productSchema);
+const Product = mongoose.model('Product', productSchema);
+module.exports = Product;

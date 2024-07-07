@@ -5,12 +5,12 @@
 
 const mongoose = require('mongoose');
 
-const userSchema = new mongoose.Schema(
+const userSchema = mongoose.Schema(
     {
-        name: {
+        username: {
             type: String,
-            required: [true, "Please provide unique name"],
-            unique: [true, "Name exist"],
+            required: [true, "Please provide unique username"],
+            unique: [true, "Username exist"],
             minlength: 3,
             maxlength: 50
         },
@@ -28,12 +28,31 @@ const userSchema = new mongoose.Schema(
             minlength: 8,
             maxlength: 1024
         },
+        firstname: {
+            type: String,
+            minlength: 3,
+            maxlength: 50,
+            default: null
+        },
+        lastname: {
+            type: String,
+            minlength: 3,
+            maxlength: 50,
+            default: null
+        },
         phone: {
             type: String,
             required: true,
+            minlength: 5,
+            maxlength: 15
+        },
+        image: {
+            type: String,
+            default: null
         },
         cloudinary_id: {
             type: String,
+            default: null
         },
         role: {
             type: String,
@@ -42,35 +61,36 @@ const userSchema = new mongoose.Schema(
             enum: ['ROOT', 'ADMIN', 'USER'],
             default: 'USER'
         },
-        /*isAdmin: {
+        active: {
             type: Boolean,
-            default: false,
-        },*/
+            default: true
+        },
         street: {
             type: String,
-            default: ''
+            default: null
         },
         apartment: {
             type: String,
-            default: ''
+            default: null
         },
-        zip: {
+        zip_code: {
             type: String,
-            default: ''
+            default: null
         },
         city: {
             type: String,
-            default: ''
+            default: null
         },
         country: {
             type: String,
-            default: ''
+            default: null
         }
     },
     {
         timestamps: true,
     }
 );
+
 
 userSchema.virtual('id').get(function () {
     return this._id.toHexString();
@@ -80,5 +100,5 @@ userSchema.set('toJSON', {
     virtuals: true,
 });
 
-exports.User = mongoose.model('User', userSchema);
-exports.userSchema = userSchema;
+const User = mongoose.model('User', userSchema);
+module.exports = User;

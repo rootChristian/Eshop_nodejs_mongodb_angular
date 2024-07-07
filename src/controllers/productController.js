@@ -3,224 +3,313 @@
 ************ Version:    1.0.0                      ********************
 ***********************************************************************/
 
-/***********************************************************************
-************ Author:    Christian KEMGANG NGUESSOP *********************
-************ Version:    1.0.0                      ********************
-***********************************************************************/
-
-const Product = require('../models/ProductModel');
-const Category = require('../models/CategoryModel')
-const ObjectID = require('mongoose').Types.ObjectId;
-const { isValidObjectId } = require('mongoose');
-const Joi = require("joi");
+const Product = require('../models/productModel');
+const Category = require('../models/categoryModel');
+const asyncHandler = require('express-async-handler');
 const cloudinary = require("../config/cloudinary");
-const { addProductBodyValidation } = require('../middleware/validationSchema');
+const { addProductBodyValidation, modifyProductBodyValidation, getParamsProductValidation } = require('../middleware/validationSchema');
 
 //Add product on the database
-module.exports.addProduct = async (req, res) => {
+module.exports.addProduct = asyncHandler(async (req, res) => {
     try {
         const { error } = addProductBodyValidation(req.body);
         if (error)
             return res.status(400).json({ error: true, message: error.details[0].message });
 
-        const { name, description, richDescription, price, image, images, cloudinary_id, size, color, category, countInStock, rating, isFeatured } = req.body;
+        const { name, description, richDescription, price, images, size, color, category, countInStock, rating, isFeatured } = req.body;
 
-        const existProduct = await Product.findOne({ name });
-        if (existProduct) return res.status(400).json({ errorMessage: "Product already exist!", });
+        // Check if the product with the same name already exists
+        const existingProductName = await Product.findOne({ name }).lean().exec();
+        if (existingProductName) 
+            return res.status(400).json({ success: false, message: "Product with the same name already exists!" });
 
-        if (!isValidObjectId(req.body.category)) return res.status(500).json({ success: false, message: 'Invalid ID: ' + req.body.category })
+        // Check if the product with the same description already exists
+        const existingProductDescription = await Product.findOne({ description }).lean().exec();
+        if (existingProductDescription) {
+            return res.status(400).json({ success: false, message: 'Description already exist!' });
+        }
 
-        const existCategory = await Category.findById(category)
-        if (!existCategory) return res.status(400).json({ errorMessage: "Category not found!", });
+        const getCat = await Category.findOne({ name: category });
+        if (!getCat) {
+            return res.status(404).json({ success: false, message: "Category not found!" })  
+        }
 
-        //const pathName = req.file.path;
+        let imageUpload, uploadedResponse;
+        if (req.file && req.file.path) {
+            imageUpload = req.file.path; // If using multer for file upload
+        } else if (req.body.image) {
+            imageUpload = req.body.image; // If image data is directly in the request body
+        }
 
-        const uploadedResponse = await cloudinary.uploader.upload(req.body.image, {
-            upload_preset: "dev_products",
+        // Upload image to cloudinary if provided
+        if (imageUpload) {
+            uploadedResponse = await cloudinary.uploader.upload(imageUpload, {
+                upload_preset: "dev_products",
+            });
+            // Handle error if image upload fails
+            if (!uploadedResponse) {
+                return res.status(500).json({ success: false, message: "Error uploading user image!" });
+            }
+        }
+
+        const newProduct = new Product({
+            name, description, richDescription, price,
+            image: uploadedResponse ? uploadedResponse.secure_url : null, images,
+            cloudinary_id: uploadedResponse ? uploadedResponse.public_id : null,
+            size, color, category: getCat._id, countInStock, rating, isFeatured
         });
 
-        if (uploadedResponse) {
-            const newProduct = new Product({
-                name,
-                description,
-                richDescription,
-                price,
-                image: uploadedResponse.secure_url,
-                images,
-                cloudinary_id: uploadedResponse.public_id,
-                size,
-                color,
-                category,
-                countInStock,
-                rating,
-                isFeatured
-            });
-
-            if (!newProduct) return res.status(500).send('The product cannot be created!');
-
-            await newProduct.save();
-            res.status(200).json({ newProduct });
+        try {
+            // Create and store new product 
+            const savedProduct = await newProduct.save();
+            if (savedProduct)
+                return res.status(201).json({ success: true, message: `Product ${name} registered successfully...` });
+            return res.status(400).json({ success: false, message: 'The product cannot be created!' });
+        } catch (error) {
+            // Handle duplicate key error
+            console.error('Error adding product:', error);
+            if (error.code === 11000) {
+                // Check which field caused the duplicate key error
+                if (error.keyPattern.name === 1) {
+                    await cloudinary.uploader.destroy(newProduct.cloudinary_id);
+                    return res.status(400).json({ success: false, message: 'Duplicate name. Please choose a different name.' });
+                } else if (error.keyPattern.description === 1) {
+                    await cloudinary.uploader.destroy(newProduct.cloudinary_id);
+                    return res.status(400).json({ success: false, message: 'Duplicate description. Please use a different description.' });
+                }
+            } else {
+                // Handle other errors
+                //console.error('An error occurred while inserting the product: ', error);
+                return res.status(500).json({ success: false, message: "An error occurred while inserting the product: " + error });
+            }
         }
     } catch (err) {
-        res.status(500).json({ message: err });
         console.log(err);
+        res.status(500).json({ success: false, message: "Internal Server Error!" });
     }
-};
+});
 
-//Get products on the database
-/*module.exports.getProducts = async (req, res) => {
-
-    const queryNew = req.query.limit;
-
+// Get all products on the database
+module.exports.getProducts = asyncHandler(async (req, res) => {
     try {
-        let products;
+        // Filter by category name if specified in the query. example: {{url}}/products?categories=électroniques,ménagers
+        let filter = {};
+        const { categories } = req.query;
+       
+        if (categories) {
+            // Separate category names into an array
+            const listCategories = categories.split(',');
 
-        if (queryNew) products = await Product.find().sort({ createdAt: -1 }).limit(6);
-        else products = await Product.find();
+            // Check if all category names are valid
+            if (!listCategories.every(category => /^[a-zA-Z0-9]{3,50}$/.test(category))) {
+                return res.status(400).json({ error: true, message: 'The categories parameter must be a list of alphanumeric character strings between 3 and 50 characters long.' });
+            }
 
-        res.status(200).json(products);
+            const categoryNames = await Category.find({ name: { $in: listCategories } });
 
+            if (categoryNames?.length !== listCategories?.length) {
+                return res.status(404).json({ success: false, message: "One or more categories not found!" });
+            }
+
+            const categoryIds = categoryNames.map(category => category._id);
+            // Add a filter by category ID
+            filter.category = { $in: categoryIds };
+        }
+
+        const productList = await Product.find(filter).populate('category').sort({ createdAt: -1 }).lean().exec();
+
+        if (!productList || productList?.length === 0) {
+            return res.status(404).json({ success: false, message: "Product not found!" });
+        }
+        res.status(200).json(productList);
     } catch (err) {
-        res.status(500).json({ message: err });
-        console.log(err);
+        //console.log(err);
+        res.status(500).json({ success: false, message: "Internal Server Error!" });
     }
-};*/
+});
 
 //Get product on the database
-/*module.exports.getProduct = async (req, res) => {
-    if (!isValidObjectId(req.params.id))
-        return res.status(500).json({ success: false, message: 'Invalid ID: ' + req.params.id })
+module.exports.getProduct = asyncHandler(async (req, res) => {
     try {
-        const product = await Product.findById(req.params.id);
+        const { error } = getParamsProductValidation(req.params);
+        if (error)
+            return res.status(400).json({ error: true, message: error.details[0].message });
+
+        const { name } = req.params;
+        const product = await Product.findOne({ name }).lean().exec();
 
         if (!product)
-            return res.status(404).json({ success: false, message: "Product not found!" })
+            return  res.status(404).json({ success: false, message: "Product not found!" })
         res.status(200).json(product);
     } catch (err) {
-        res.status(500).json({ message: err });
-        console.log(err);
+        //console.log(err);
+        res.status(500).json({ success: false, message: "Internal Server Error!" });
     }
-};*/
+});
 
-//Get products by category
-/*module.exports.productByCategory = async (req, res) => {
-    const idCategory = req.params.id;
-
+// Modify product on the database
+module.exports.modifyProduct = asyncHandler(async (req, res) => {
     try {
-        if (!isValidObjectId(idCategory)) return res.status(500).json({ success: false, message: 'Invalid ID: ' + idCategory })
+        // Validation of request parameters and user modification data
+        const { error: paramsError } = getParamsProductValidation(req.params);
+        const { error: bodyError } = modifyProductBodyValidation(req.body);
 
-        const existCategory = await Category.findById(idCategory)
-        if (!existCategory) return res.status(400).json({ errorMessage: "Category not found!", });
+        // Checking validation errors
+        if (paramsError || bodyError) {
+            let errors = [];
+            if (paramsError) {
+                errors = [...errors, ...paramsError.details.map(detail => detail.message)];
+            }
+            if (bodyError) {
+                errors = [...errors, ...bodyError.details.map(detail => detail.message)];
+            }
+            return res.status(400).json({ success: false, message: errors[0] });
+        }
 
-        const byCategory = await Product.find({ category: existCategory });
+        const { name } = req.params;
+        const product = await Product.findOne({ name });
 
-        if (byCategory) res.status(200).json(byCategory);
+        if (!product) {
+            return res.status(404).json({ success: false, message: "Product not found!" });
+        }
 
-    } catch (err) {
-        res.status(500).json({ message: err });
-        console.log(err);
-    }
-};*/
+        // Check for duplicate name and description
+        if (req.body.name && req.body.name !== product.name) {
+            const duplicateName = await Product.findOne({ name: req.body.name });
+            if (duplicateName) {
+                return res.status(400).json({ success: false, message: 'Product already exist!' });
+            }
+        }
 
-//Modify product on the database
-/*module.exports.modifyProduct = async (req, res) => {
+        if (req.body.description && req.body.description !== product.description) {
+            const duplicateDescription = await Product.findOne({ description: req.body.description });
+            if (duplicateDescription) {
+                return res.status(400).json({ success: false, message: 'Description already exist!' });
+            }
+        }
 
-    const idProduct = req.params.id;
+        let getCategoryId;
+        if (req.body.category) {
+            const category = await Category.findOne({name: req.body.category});
 
-    try {
+            if (category) {
+                getCategoryId = category.id;
+            } else{
+                return res.status(404).json({ success: false, message: "Category not found!" })
+            }
+        }
 
-        const schema = Joi.object({
-            name: Joi.string().min(3).max(20),
-            description: Joi.string().min(3).max(200),
-            quantity: Joi.number().min(1).max(1000),
-            price: Joi.number().min(1).max(1000),
-            image: Joi.string().dataUri(),
-            category: Joi.string(),
-            size: Joi.array().items(Joi.string()),
-            color: Joi.array().items(Joi.string()),
-            inStock: Joi.boolean(),
-        });
-
-        const { error } = schema.validate(req.body);
-
-        if (error) return res.status(400).send(error.details[0].message);
-
-        if (!isValidObjectId(idProduct)) res.status(500).json({ success: false, message: 'Invalid ID: ' + idProduct })
-
-        let product = await Product.findById(req.params.id);
-
-        let imagepath, cld_id, uploadedResponse;
-
-        if ((req?.file === "") || (req?.file === undefined)) {
-
+        // Management of user profile image updates
+        let imageUpload, imagepath, cld_id, uploadedResponse;
+        if (req.file && req.file.path) {
+            imageUpload = req.file.path; // If using multer for file upload
+        } else if (req.body.image) {
+            imageUpload = req.body.image; // If image data is directly in the request body
+        } else {
             imagepath = product.image;
             cld_id = product.cloudinary_id;
+        }
 
-        } else {
-            await cloudinary.uploader.destroy(product.cloudinary_id);
-
-            const uploadedResponse = await cloudinary.uploader.upload(req.body.image, {
+        // Upload the new image to Cloudinary and delete the old one
+        if (imageUpload) {
+            if (product.cloudinary_id) {
+                await cloudinary.uploader.destroy(product.cloudinary_id);
+            }
+            
+            uploadedResponse = await cloudinary.uploader.upload(imageUpload, {
                 upload_preset: "dev_products",
+            }).catch(err => {
+                return res.status(500).json({ success: false, message: "Error uploading user image!" });
             });
 
             imagepath = uploadedResponse.secure_url;
             cld_id = uploadedResponse.public_id;
         }
 
-        let getCat;
-        if (req.body.category) {
-            let category = await Category.findById(req.body.category);
-
-            if (category)
-                getCat = req.body.category;
-            else
-                return res.status(404).json({ success: false, message: "Category not found!" })
-        }
-
         const data = {
             name: req.body.name || product.name,
             description: req.body.description || product.description,
-            quantity: req.body.quantity || product.quantity,
+            richDescription: req.body.richDescription || product.richDescription,
             price: req.body.price || product.price,
             image: imagepath,
+            images: req.body.images || product.images,
             cloudinary_id: cld_id,
-            category: getCat,
             size: req.body.size || product.size,
             color: req.body.color || product.color,
-            inStock: req.body.inStock || product.inStock,
+            category: getCategoryId,
+            countInStock: req.body.countInStock || product.countInStock,
+            rating: req.body.rating || product.rating,
+            isFeatured: req.body.isFeatured || product.isFeatured
         }
 
-        if (!data) return res.status(500).send('The Product cannot be updated!');
+        if (!data) return res.status(400).json({ success: false, message: "The product cannot be updated!" });
 
         const updatedProduct = await Product.findByIdAndUpdate(
-            idProduct, data, { new: true }
+            product._id, data, { new: true }
         );
 
-        const message = "Product updated!";
-        res.status(200).json(message);
-
-    } catch (err) {
-        res.status(500).json({ message: err });
-        console.log(err);
-    }
-};*/
-
-//Delete product on the database
-/*module.exports.deleteProduct = async (req, res) => {
-    try {
-        if (!isValidObjectId(req.params.id))
-            res.status(500).json({ message: 'Invalid ID: ' + req.params.id })
-
-        let product = await Product.findById(req.params.id);
-        if (product) {
-            await cloudinary.uploader.destroy(product.cloudinary_id);
-            await product.remove();
-            return res.status(200).json({ success: true, message: 'Product deleted!' })
+        if (updatedProduct) {
+            return res.status(200).json({ success: true, message: 'Product updated!' });
         } else {
-            return res.status(404).json({ success: false, message: "Product not found!" })
+            return res.status(400).json({ success: false, message: 'The product cannot be updated!' });
         }
     } catch (err) {
-        res.status(500).json({ message: err });
-        console.log(err);
+        console.error(err);
+        res.status(500).json({ success: false, message: "Internal Server Error!" });
     }
-};*/
+});
+
+// Delete product on the database
+module.exports.deleteProduct = asyncHandler(async (req, res) => {
+    try {
+
+        const { error } = getParamsProductValidation(req.params);
+        if (error)
+            return res.status(400).json({ error: true, message: error.details[0].message });
+
+        const { name } = req.params;
+        const product = await Product.findOne({ name });
+        if (!product) {
+            return res.status(404).json({ success: false, message: "Product not found!" })  
+        }
+        if(product.cloudinary_id)  await cloudinary.uploader.destroy(product.cloudinary_id);
+        await product.deleteOne();
+        res.status(200).json({ success: true, message: 'Product deleted!' })
+    } catch (err) {
+        //console.log(err);
+        res.status(500).json({ success: false, message: "Internal Server Error!" });
+    }
+});
+
+
+//Get total product on the database
+module.exports.getCount = asyncHandler(async (req, res) => {
+    try {
+        let productCount = await Product.countDocuments({}).lean().exec();
+
+        if (productCount) {
+            return  res.status(200).json({ success: true, productCount });
+        }
+        res.status(404).json({success: false, message: "Empty product!" });
+        
+    } catch (err) {
+        //console.log(err);
+        res.status(500).json({ success: false, message: "Internal Server Error!" });
+    }
+});
+
+//Get featured product on the database
+module.exports.getFeatured = asyncHandler(async (req, res) => {
+    try {
+        const count = req.params.count ? req.params.count : 0
+        const products = await Product.find({isFeatured: true}).limit(+count);
+
+        if(!products?.length) { 
+            return  res.status(404).json({success: false, message: "Empty featured!" });
+        }
+        res.status(200).json({ success: true, products });
+    } catch (err) {
+        //console.log(err);
+        res.status(500).json({ success: false, message: "Internal Server Error!" });
+    }
+});

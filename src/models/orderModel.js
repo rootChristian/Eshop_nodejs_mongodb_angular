@@ -46,7 +46,11 @@ const orderSchema = mongoose.Schema(
         user: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'User',
-        }
+        }/*,
+        dateOrder: {
+            type: DateTime,
+            default: DateTime.now()
+        }*/
     },
     {
         timestamps: true,
